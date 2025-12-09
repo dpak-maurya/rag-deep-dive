@@ -1,0 +1,4 @@
+numpy
+chromadb
+requests
+tqdm
