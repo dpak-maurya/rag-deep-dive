@@ -2,3 +2,6 @@ numpy
 chromadb
 requests
 tqdm
+matplotlib
+scipy
+umap-learn

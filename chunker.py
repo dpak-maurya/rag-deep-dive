@@ -12,6 +12,7 @@ def chunk_text(text: str, max_chars: int = 800) -> List[str]:
     Prefers to break on paragraph boundaries when possible.
     Handles long paragraphs safely.
     """
+
     paragraphs = text.split("\n\n")
     chunks = []
     current = ""
@@ -47,7 +48,6 @@ def chunk_text(text: str, max_chars: int = 800) -> List[str]:
 
     # final chunk
     if current.strip():
-        print(current.strip())
         chunks.append(current.strip())
 
     return chunks

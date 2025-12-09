@@ -9,7 +9,7 @@ EMBED_MODEL = "mxbai-embed-large"
 CHAT_MODEL = "gemma3:4b"
 
 # Debugging toggles
-DEBUG = True
+DEBUG = False
 
 # For visualize step (only call when you want)
 VISUALIZE_AFTER_BUILD = False
