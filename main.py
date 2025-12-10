@@ -14,11 +14,13 @@ from tqdm import tqdm
 import numpy as np
 logging.basicConfig(level=logging.INFO)
 
-from chunker import chunk_text
+from ingest import load_directory
+from chunker import chunk_document
 from embedder import Embedder
 from vector_store import VectorStore
 from retrieve import Retriever
 from config import CHAT_MODEL, OLLAMA_BASE_URL, DEBUG
+
 
 
 # ============================================================
@@ -62,7 +64,10 @@ def chat_loop(store: VectorStore, embedder: Embedder, model: str):
         # RAG RETRIEVAL
         # -------------------------------
         hits = retriever.retrieve(q, top_k=5, debug=DEBUG)
-        rag_context = "\n\n".join([h["chunk"] for h in hits])
+        rag_context = "\n\n".join(
+            f"[Source: {h['metadata']['source']} | Lines {h['metadata']['start_line']}–{h['metadata']['end_line']}]\n{h['text']}"
+            for h in hits
+        )
 
         # -------------------------------
         # MEMORY FORMAT
@@ -117,9 +122,9 @@ Use the RAG context ONLY for factual grounding.
 # ============================================================
 # BUILD INDEX
 # ============================================================
-def build_index(input_file: str, index_file: str):
+def build_index(input_path: str, index_file: str):
     print("[DEBUG] Starting index build...")
-    print("[DEBUG] Reading input file:", input_file)
+    print("[DEBUG] Reading input:", input_path)
 
     embedder = Embedder()
     store = VectorStore()
@@ -127,18 +132,20 @@ def build_index(input_file: str, index_file: str):
     # -------------------------------
     # Read text
     # -------------------------------
-    with open(input_file, "r", encoding="utf-8") as f:
-        text = f.read()
+    docs = load_directory(input_path)
 
     # -------------------------------
     # Chunk text
     # -------------------------------
     print("\n[DEBUG] Starting chunking...")
-    chunks = chunk_text(text)
-    print(f"[DEBUG] Total input text length: {len(text)}")
-    print(f"[DEBUG] Total chunks created: {len(chunks)}")
+    all_chunks = []
+    for doc in docs:
+        chunk_list = chunk_document(doc=doc)
+        all_chunks.extend(chunk_list)
+    
+    print(f"[DEBUG] Total chunks created: {len(all_chunks)}")
 
-    lens = [len(c) for c in chunks]
+    lens = [len(c["text"]) for c in all_chunks]
     print(f"[DEBUG] Chunk lengths | min={min(lens)}, max={max(lens)}, avg={int(sum(lens)/len(lens))}")
     print(f"[DEBUG] Chunking Finished")
 
@@ -155,7 +162,7 @@ def build_index(input_file: str, index_file: str):
 
     # tqdm progress bar
     pbar = tqdm(
-        range(0, len(chunks), BATCH_SIZE),
+        range(0, len(all_chunks), BATCH_SIZE),
         desc="Embedding Progress"
     )
 
@@ -163,10 +170,11 @@ def build_index(input_file: str, index_file: str):
         batch_start = time.time()
 
         # Slice batch
-        batch = chunks[i:i + BATCH_SIZE]
+        batch = all_chunks[i:i + BATCH_SIZE]
 
         # Embed
-        batch_vecs = embedder.embed(batch)
+        batch_texts = [c["text"] for c in batch]
+        batch_vecs = embedder.embed(batch_texts)
         all_vecs.append(batch_vecs)
 
         # Time measurement
@@ -182,7 +190,7 @@ def build_index(input_file: str, index_file: str):
         })
 
         # Optional readable line
-        preview = batch[0].replace("\n", " ")[:60]
+        preview = batch_texts[0].replace("\n", " ")[:60]
         print(f"\n  [INFO] Batch {i//BATCH_SIZE + 1} done in {batch_time:.2f}s | preview: '{preview}...'")
 
     # -------------------------------
@@ -211,7 +219,7 @@ def build_index(input_file: str, index_file: str):
     # -------------------------------
     # Store chunks + embeddings
     # -------------------------------
-    store.add(chunks, vecs)
+    store.add(all_chunks, vecs)
 
     # -------------------------------
     # Save to pickle
@@ -219,7 +227,7 @@ def build_index(input_file: str, index_file: str):
     store.save(index_file)
 
     print(f"[DEBUG] Index build complete:")
-    print(f"  Total chunks: {len(chunks)}")
+    print(f"  Total chunks: {len(all_chunks)}")
     print(f"  Embedding dims: {vecs.shape[1]}")
     print(f"  Saved to: {index_file}")
 
@@ -230,7 +238,7 @@ def build_index(input_file: str, index_file: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["build", "chat"])
-    parser.add_argument("path1", help="Input document OR index file")
+    parser.add_argument("path1", help="Input Source(file or folder path) OR index file")
     parser.add_argument("path2", nargs="?", help="Index output file (build only)")
     parser.add_argument("--model", default=CHAT_MODEL)
 
@@ -238,7 +246,7 @@ def main():
 
     if args.command == "build":
         if not args.path2:
-            raise ValueError("For 'build', you must provide: input_file index_file")
+            raise ValueError("For 'build', you must provide: input_source_path index_file")
         build_index(args.path1, args.path2)
 
     elif args.command == "chat":

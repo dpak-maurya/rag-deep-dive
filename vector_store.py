@@ -15,15 +15,16 @@ class VectorStore:
         self.vectors = None  # numpy array shape (N, D)
         print("[DEBUG] VectorStore initialized.")
 
-    def add(self, chunks: List[str], vectors: np.ndarray):
+    def add(self, chunk_objects, vectors):
         """
-        Adds text chunks + embedding matrix.
+        chunk_objects = list of { text, metadata }
+        vectors = numpy array
         """
         print("\n[DEBUG] Storing chunks + vectors...")
-        print(f"[DEBUG] Chunks: {len(chunks)}")
+        print(f"[DEBUG] Chunks: {len(chunk_objects)}")
         print(f"[DEBUG] Vectors shape: {vectors.shape}")
 
-        self.chunks.extend(chunks)
+        self.chunks.extend(chunk_objects)
 
         if self.vectors is None:
             self.vectors = vectors
@@ -92,10 +93,15 @@ class VectorStore:
             print("====================================\n")
 
         results = []
-        for i in top_idx:
+        for idx in top_idx:
+            score = float(scores[idx])
+            chunk_obj = self.chunks[idx]
+            text = chunk_obj["text"]
+            metadata = chunk_obj["metadata"]
             results.append({
-                "chunk": self.chunks[i],
-                "score": float(scores[i])
+                "text": text,
+                "metadata": metadata,
+                "score": score
             })
 
         return results

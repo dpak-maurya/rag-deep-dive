@@ -4,50 +4,93 @@ Simple text chunker for RAG.
 Splits document into manageable sections with paragraph awareness.
 """
 
-from typing import List
+from typing import List, Dict
 
-def chunk_text(text: str, max_chars: int = 800) -> List[str]:
+def chunk_document(doc: dict, max_chars=800) -> List[Dict]:
     """
     Splits text into chunks with a maximum size.
     Prefers to break on paragraph boundaries when possible.
     Handles long paragraphs safely.
+    Takes a document with:
+       { text, source, lines }
+    Returns chunks with metadata:
+       { text, metadata }
     """
+
+    text = doc["text"]
+    source = doc["source"]
+    lines = doc["lines"]
 
     paragraphs = text.split("\n\n")
     chunks = []
     current = ""
+    start_line = 0
+
+    line_count = 0
 
     for p in paragraphs:
-        p = p.strip()
-        if not p:
+        striped_p = p.strip()
+        if not striped_p:
             continue
 
-        # If paragraph alone is too large → force-split it
-        if len(p) > max_chars:
-            # finalize current chunk first
+        p_lines = striped_p.count("\n") + 1
+
+        # Hard split if paragraph > max_chars
+        if len(striped_p) > max_chars:
             if current.strip():
-                chunks.append(current.strip())
+                chunks.append({
+                    "text": current.strip(),
+                    "metadata": {
+                        "source": source,
+                        "start_line": start_line,
+                        "end_line": line_count
+                    }
+                })
                 current = ""
 
-            # split long paragraph into hard chunks
-            for i in range(0, len(p), max_chars):
-                sub = p[i:i + max_chars]
-                chunks.append(sub.strip())
+            for i in range(0, len(striped_p), max_chars):
+                sub = striped_p[i:i+max_chars]
+                chunks.append({
+                    "text": sub,
+                    "metadata": {
+                        "source": source,
+                        "start_line": line_count,
+                        "end_line": line_count + p_lines
+                    }
+                })
 
+            line_count += p_lines
             continue
 
-        # normal case: add paragraph if it fits
-        if len(current) + len(p) <= max_chars:
-            current += p + "\n\n"
+        # Otherwise, try adding paragraph to current chunk
+        if len(current) + len(striped_p) <= max_chars:
+            if current == "":
+                start_line = line_count
+            current += striped_p + "\n\n"
+            line_count += p_lines
         else:
-            # close current chunk
-            if current.strip():
-                chunks.append(current.strip())
+            # Save current chunk
+            chunks.append({
+                "text": current.strip(),
+                "metadata": {
+                    "source": source,
+                    "start_line": start_line,
+                    "end_line": line_count
+                }
+            })
+            current = striped_p + "\n\n"
+            start_line = line_count
+            line_count += p_lines
 
-            current = p + "\n\n"
-
-    # final chunk
+    # Final chunk
     if current.strip():
-        chunks.append(current.strip())
+        chunks.append({
+            "text": current.strip(),
+            "metadata": {
+                "source": source,
+                "start_line": start_line,
+                "end_line": line_count
+            }
+        })
 
     return chunks
