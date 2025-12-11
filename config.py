@@ -6,7 +6,7 @@ Toggle DEBUG to enable/disable debug prints and checks.
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 EMBED_MODEL = "mxbai-embed-large"
-CHAT_MODEL = "gemma3:4b"
+CHAT_MODEL = "llama3.1:8b"
 
 # Debugging toggles
 DEBUG = False
