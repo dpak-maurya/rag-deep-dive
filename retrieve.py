@@ -1,7 +1,7 @@
 # retrieve.py
 import logging
 import numpy as np
-
+from sentence_transformers import CrossEncoder
 
 class Retriever:
     """
@@ -20,129 +20,94 @@ class Retriever:
     def __init__(self, embedder, store):
         self.embedder = embedder
         self.store = store
+        try:
+            # Initialize Cross-Encoder for re-ranking
+            # "ms-marco-MiniLM-L-6-v2" is fast and effective for passage ranking
+            print("[DEBUG] Loading Refiner model (Cross-Encoder)...")
+            self.cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+            print("[DEBUG] Refiner model loaded.")
+        except Exception as e:
+            print(f"⚠️ Failed to load Cross-Encoder: {e}")
+            self.cross_encoder = None
 
     # ===============================================================
     # PUBLIC METHOD
     # ===============================================================
-    def retrieve(self, query, top_k=5, debug=False):
+    def retrieve(self, query, top_k=5, use_hybrid=True, use_rerank=True, debug=False):
         """
-        Normal mode:
-            - delegates to vector store search()
-
-        Debug mode:
-            - performs full transparent manual retrieval
-            - prints stats + histograms
-            - shows full chunk + metadata in results
+        Retrieves documents using vector/hybrid search and optionally re-ranks them.
+        
+        Args:
+            query (str): The search query.
+            top_k (int): Number of final results to return.
+            use_hybrid (bool): Whether to use hybrid search (Vector + BM25).
+            use_rerank (bool): Whether to use Cross-Encoder re-ranking.
+            debug (bool): Print debug stats.
         """
+        
+        # 1. Fetch Candidates
+        # If re-ranking, we fetch MORE candidates first (e.g. 5x top_k)
+        initial_k = top_k * 5 if use_rerank and self.cross_encoder else top_k
+        
         q_vec = self.embedder.embed([query])[0]
+        candidates = []
+
+        if use_hybrid and hasattr(self.store, 'hybrid_search'):
+            candidates = self.store.hybrid_search(
+                query_text=query,
+                query_vector=q_vec,
+                top_k=initial_k
+            )
+        else:
+            candidates = self.store.search(q_vec, top_k=initial_k, debug=debug)
+
+        # 2. Re-rank Candidates (if enabled)
+        if use_rerank and self.cross_encoder:
+            if not candidates:
+                return []
+                
+            print(f"[DEBUG] Re-ranking {len(candidates)} candidates for: '{query}'")
+            
+            # Prepare pairs for Cross-Encoder: [[query, doc1], [query, doc2], ...]
+            # We use a limited window of text for speed (first 1000 chars)
+            pairs = [[query, doc["text"][:1000]] for doc in candidates]
+            
+            # Predict scores
+            scores = self.cross_encoder.predict(pairs)
+            
+            # update scores in candidates
+            for i, score in enumerate(scores):
+                candidates[i]["score"] = float(score) # Cross-Encoder score replaces vector score
+                candidates[i]["metadata"]["rerank_score"] = float(score)
+            
+            # Sort by new score (descending)
+            candidates.sort(key=lambda x: x["score"], reverse=True)
+            
+            # Slice top_k
+            results = candidates[:top_k]
+            
+            if debug:
+                print("\n[DEBUG] Top Re-ranked Results:")
+                for i, res in enumerate(results):
+                    print(f"  #{i+1}: {res['score']:.4f} | {res['metadata'].get('source', 'unknown')}")
+        else:
+            results = candidates
 
         # ----------------------------------------------------------
-        # NORMAL FAST MODE
+        # DEBUG OUTPUT (Optional)
         # ----------------------------------------------------------
-        if not debug:
-            return self.store.search(q_vec, top_k=top_k, debug=False)
-
-        # ----------------------------------------------------------
-        # DEBUG MODE — FULL INSPECTION
-        # ----------------------------------------------------------
-        print("\n" + "=" * 60)
-        print("🔍 RAG RETRIEVAL DEBUG MODE")
-        print("=" * 60)
-        print(f"[QUERY] {query}")
-
-        chunks, vectors = self.store.all()  # chunks = {"text":..., "metadata":...}
-        N = len(chunks)
-
-        # -------------------------
-        # Query vector stats
-        # -------------------------
-        print("\n[DEBUG] Query Embedding Stats:")
-        print(f"  Shape: {q_vec.shape}")
-        print(f"  Norm: {np.linalg.norm(q_vec):.4f}")
-        print(f"  Mean: {q_vec.mean():.5f}")
-        print(f"  Min/Max: {q_vec.min():.4f} / {q_vec.max():.4f}")
-        print(f"  First 10 dims: {q_vec[:10]}")
-
-        # -------------------------
-        # Cosine similarities
-        # -------------------------
-        dot = np.dot(vectors, q_vec)
-        denom = np.linalg.norm(vectors, axis=1) * np.linalg.norm(q_vec) + 1e-8
-        sims = dot / denom
-
-        print("\n[DEBUG] Cosine Similarity Distribution:")
-        print(f"  Min:  {sims.min():.4f}")
-        print(f"  Max:  {sims.max():.4f}")
-        print(f"  Mean: {sims.mean():.4f}")
-        print(f"  Std:  {sims.std():.4f}")
-
-        # -------------------------
-        # Plot histogram
-        # -------------------------
-        import matplotlib.pyplot as plt
-
-        plt.figure(figsize=(8, 3))
-        plt.hist(sims, bins=20)
-        plt.title("Cosine Similarity Distribution")
-        plt.xlabel("similarity")
-        plt.ylabel("count")
-        plt.tight_layout()
-        plt.show()
-
-        # -------------------------
-        # Histogram buckets
-        # -------------------------
-        hist, edges = np.histogram(sims, bins=10)
-        print("\n  Histogram (10 bins):")
-        for i in range(len(hist)):
-            print(f"     {edges[i]:.2f}–{edges[i+1]:.2f}: {hist[i]}")
-
-        # -------------------------
-        # TOP K
-        # -------------------------
-        top_i = np.argsort(sims)[::-1][:top_k]
-        results = []
-
-        print(f"\n[DEBUG] Top {top_k} matches:")
-        for rank, idx in enumerate(top_i, 1):
-            score = float(sims[idx])
-            chunk_obj = chunks[idx]
-            text = chunk_obj["text"]
-            metadata = chunk_obj["metadata"]
-
-            preview = text.replace("\n", " ")[:150]
-
-            print(f"\n  #{rank} | score={score:.4f} | index={idx}")
-            print(f"      Preview: {preview}...")
-            print(f"      Metadata: {metadata}")
-
-            results.append({
-                "text": text,
-                "metadata": metadata,
-                "score": score
-            })
-
-        print("=" * 60 + "\n")
-
-        # -------------------------
-        # TOP-K BAR CHART
-        # -------------------------
-        top_scores = [float(sims[i]) for i in top_i]
-        labels = [f"Chunk {i}" for i in top_i]
-
-        plt.figure(figsize=(8, 4))
-        plt.barh(labels, top_scores)
-        plt.xlabel("Cosine Similarity")
-        plt.title("Top-K Retrieved Chunk Scores")
-        plt.gca().invert_yaxis()
-        plt.tight_layout()
-        plt.show()
-
+        if debug and not use_rerank:
+             print("\n" + "=" * 60)
+             print("🔍 RAG RETRIEVAL DEBUG MODE")
+             print("=" * 60)
+             print(f"[QUERY] {query}")
+        
         # Logging
         logging.info(
-            "RAG Debug retrieve | query='%s' | results=%s",
+            "RAG retrieve | query='%s' | rerank=%s | results=%d",
             query,
-            [{"score": r["score"], "metadata": r["metadata"]} for r in results]
+            use_rerank,
+            len(results)
         )
 
         return results

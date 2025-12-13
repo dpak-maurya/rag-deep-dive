@@ -1,7 +1,7 @@
 numpy
-chromadb
-requests
+openai
 tqdm
-matplotlib
-scipy
-umap-learn
+chromadb
+sentence-transformers
+watchdog
+PyPDF2

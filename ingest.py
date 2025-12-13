@@ -1,11 +1,11 @@
 # ingest.py
 import os
 
-ALLOWED_EXT = {".txt", ".md", ".py", ".json"}
+ALLOWED_EXT = {".txt", ".md", ".py", ".json", ".pdf"}
 
-def load_directory(path: str):
+def load_path(path: str):
     """
-    Walk a directory and return list of:
+    Load a single file or walk a directory and return list of:
     {
         "text": full file text,
         "source": file path,
@@ -14,28 +14,59 @@ def load_directory(path: str):
     """
     docs = []
 
-    for root, dirs, files in os.walk(path):
-        # Skip hidden directories
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+    if os.path.isfile(path):
+        # Handle single file
+        files_to_process = [path]
+        base_dir = os.path.dirname(path)
+    else:
+        # Handle directory
+        files_to_process = []
+        for root, dirs, files in os.walk(path):
+            # Skip hidden directories
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for f in files:
+                if not f.startswith("."):
+                    files_to_process.append(os.path.join(root, f))
 
-        for f in files:
-            if f.startswith("."):
+    for fp in files_to_process:
+        ext = os.path.splitext(fp)[1].lower()
+        if ext not in ALLOWED_EXT:
+            continue
+        
+        # Handle PDF files
+        if ext == ".pdf":
+            try:
+                import PyPDF2
+                with open(fp, "rb") as file:
+                    pdf = PyPDF2.PdfReader(file)
+                    text = ""
+                    for page in pdf.pages:
+                        text += page.extract_text() + "\n"
+                    lines = text.split("\n")
+            except Exception as e:
+                print(f"⚠️ Failed to read PDF {fp}: {e}")
+                continue
+        else:
+            # Handle text files
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as file:
+                    text = file.read()
+                    lines = text.split("\n")
+            except Exception as e:
+                print(f"⚠️ Failed to read {fp}: {e}")
                 continue
 
-            ext = os.path.splitext(f)[1].lower()
-            if ext not in ALLOWED_EXT:
-                continue
+        # Prepend filename to text content so it is embedded and searchable
+        filename = os.path.basename(fp)
+        final_text = f"File: {filename}\n\n{text}"
 
-            fp = os.path.join(root, f)
-
-            with open(fp, "r", encoding="utf-8", errors="ignore") as file:
-                text = file.read()
-                lines = text.split("\n")
-
-            docs.append({
-                "text": text,
-                "lines": lines,
-                "source": fp
-            })
+        docs.append({
+            "text": final_text,
+            "lines": lines,
+            "source": fp
+        })
 
     return docs
+
+# Alias for backward compatibility
+load_directory = load_path
